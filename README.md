@@ -48,7 +48,7 @@ Am Ende entsteht ein **übersichtliches, durchsuchbares Logbuch**, das sich z. B
 2. Starte `Promptocoll.exe`
 3. Fertig – keine Installation nötig
 
-Die Datei `logbook.json` wird automatisch **im gleichen Ordner** angelegt.
+Die Datei `log.json` wird automatisch **im gleichen Ordner** angelegt.
 
 ### 🧑‍💻 Aus dem Quellcode starten
 ```bash
