@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# App data
+logbook.json
+
+# OS
+.DS_Store
+Thumbs.db
