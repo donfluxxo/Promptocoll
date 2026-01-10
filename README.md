@@ -1,7 +1,7 @@
 # Promptocoll 📝🤖  
 KI - Logbuch: Ein kleines Logbuch zur Dokumentation von KI-Nutzung im Studium
 
-Promptocoll ist eine kleine Desktop-App, die ich gebaut habe, um meine **KI-Nutzung während der Bachelorarbeit sauber zu dokumentieren**.
+Promptocoll ist eine kleine Desktop-App, die ich mithilfe von ChatGPT gebaut habe, um meine **KI-Nutzung während der Bachelorarbeit sauber zu dokumentieren**.
 
 Viele Hochschulen verlangen inzwischen, dass man transparent angibt,
 - **wo** KI genutzt wurde,
