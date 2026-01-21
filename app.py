@@ -3,6 +3,7 @@ import csv
 import os
 import uuid
 import sys
+import shutil
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 import tkinter as tk
@@ -16,6 +17,8 @@ else:
     # läuft als normales Python-Skript
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "log.json")
+MEDIA_DIR = os.path.join(BASE_DIR, "Media")
+os.makedirs(MEDIA_DIR, exist_ok=True)
 
 
 MODEL_PRESETS = [
@@ -90,11 +93,17 @@ class LogEntry:
     section: str = ""   # Kapitel
     project: str = ""   # Projektname
     tags: list = None
+    media_prompt: list = None   # Anhänge zum Prompt
+    media_response: list = None # Anhänge zur Antwort
 
     def to_dict(self):
         d = asdict(self)
         if d["tags"] is None:
             d["tags"] = []
+        if d.get("media_prompt") is None:
+            d["media_prompt"] = []
+        if d.get("media_response") is None:
+            d["media_response"] = []
         return d
 
 
@@ -121,6 +130,8 @@ class LogbookApp(tk.Tk):
 
         self.entries: list[LogEntry] = []
         self.filtered_ids: list[str] = []
+        self.pending_media_prompt: list[str] = []
+        self.pending_media_response: list[str] = []
 
         self._build_ui()
         self._load_data()
@@ -250,6 +261,14 @@ class LogbookApp(tk.Tk):
 
         ttk.Button(btns, text="Felder leeren", command=self._clear_input_fields).pack(side="left", padx=8)
 
+        # Paperclip symbol
+        paperclip = "📎"
+        ttk.Button(btns, text=f"{paperclip} Prompt", command=lambda: self._attach_media("prompt")).pack(side="left", padx=8)
+        ttk.Button(btns, text=f"{paperclip} Antwort", command=lambda: self._attach_media("response")).pack(side="left", padx=8)
+
+        self.media_var = tk.StringVar(value="Keine Anhänge")
+        ttk.Label(btns, textvariable=self.media_var).pack(side="left", padx=8)
+
         self._on_model_selected()
 
     def _build_log_tab(self):
@@ -268,9 +287,9 @@ class LogbookApp(tk.Tk):
         search_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
         search_entry.bind("<KeyRelease>", lambda e: self._refresh_log())
 
-        ttk.Label(top, text="Modell-Filter").grid(row=0, column=2, sticky="e")
-        self.filter_model_var = tk.StringVar(value="(alle)")
-        self.filter_combo = ttk.Combobox(top, textvariable=self.filter_model_var, state="readonly")
+        ttk.Label(top, text="Projekt-Filter").grid(row=0, column=2, sticky="e")
+        self.filter_project_var = tk.StringVar(value="(alle)")
+        self.filter_combo = ttk.Combobox(top, textvariable=self.filter_project_var, state="readonly")
         self.filter_combo.grid(row=0, column=3, sticky="ew", padx=(8, 8))
         self.filter_combo.bind("<<ComboboxSelected>>", lambda e: self._refresh_log())
 
@@ -356,6 +375,9 @@ class LogbookApp(tk.Tk):
             self.section_var.set("")
             self.tags_var.set("")
             self.contrib_var.set("")   # Projekt
+            self.pending_media_prompt = []
+            self.pending_media_response = []
+            self._update_media_label()
         # keep model selection as-is
 
     def _toast(self, msg: str, ms: int = 5000):
@@ -395,6 +417,64 @@ class LogbookApp(tk.Tk):
 
         self._toast_after_id = self.after(ms, clear)
 
+    def _open_media_file(self, filename: str):
+        path = os.path.join(MEDIA_DIR, filename)
+        if not os.path.exists(path):
+            messagebox.showerror("Media", f"Datei nicht gefunden:\n{path}")
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", path])
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showerror("Media öffnen fehlgeschlagen", str(e))
+
+    def _update_media_label(self):
+        p = getattr(self, "pending_media_prompt", [])
+        r = getattr(self, "pending_media_response", [])
+        if not p and not r:
+            self.media_var.set("Keine Anhänge")
+            return
+
+        parts = []
+        if p:
+            parts.append(f"Prompt: {len(p)}")
+        if r:
+            parts.append(f"Antwort: {len(r)}")
+        self.media_var.set("Anhänge — " + " | ".join(parts))
+
+    def _attach_media(self, target: str):
+        path = filedialog.askopenfilename(
+            title="Datei anhängen",
+            filetypes=[("Alle Dateien", "*.*")]
+        )
+        if not path:
+            return
+
+        try:
+            os.makedirs(MEDIA_DIR, exist_ok=True)
+            ext = os.path.splitext(path)[1]
+            base = os.path.splitext(os.path.basename(path))[0]
+            safe_base = "".join(c for c in base if c.isalnum() or c in ("-", "_"))[:40] or "file"
+            fname = f"{safe_base}_{uuid.uuid4().hex[:8]}{ext}"
+            dest = os.path.join(MEDIA_DIR, fname)
+            shutil.copy2(path, dest)
+
+            if target == "prompt":
+                self.pending_media_prompt.append(fname)
+            else:
+                self.pending_media_response.append(fname)
+
+            self._update_media_label()
+            self._toast("✓ Datei angehängt", 2500)
+        except Exception as e:
+            messagebox.showerror("Anhang fehlgeschlagen", str(e))
+
     def add_entry(self):
         prompt = self.prompt_txt.get("1.0", "end").strip()
         response = self.response_txt.get("1.0", "end").strip()
@@ -428,9 +508,14 @@ class LogbookApp(tk.Tk):
             section=self.section_var.get().strip(),
             project=self.contrib_var.get().strip(),
             tags=tags,
+            media_prompt=list(self.pending_media_prompt),
+            media_response=list(self.pending_media_response),
         )
         self.entries.append(entry)
         self._save_data()
+        self.pending_media_prompt = []
+        self.pending_media_response = []
+        self._update_media_label()
         self._clear_input_fields(keep_optional=True)
         self._refresh_log()
         self._toast("✓ Eintrag gespeichert", 5000)
@@ -447,7 +532,7 @@ class LogbookApp(tk.Tk):
     def _load_data(self):
         if not os.path.exists(DATA_FILE):
             self.entries = []
-            self._update_filter_models()
+            self._update_filter_projects()
             return
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -465,30 +550,32 @@ class LogbookApp(tk.Tk):
                         section=item.get("section", ""),
                         project=item.get("project", ""),
                         tags=item.get("tags", []) or [],
+                        media_prompt=item.get("media_prompt", []) or [],
+                        media_response=item.get("media_response", []) or [],
                     )
                 )
-            self._update_filter_models()
+            self._update_filter_projects()
         except Exception as e:
             messagebox.showerror("Laden fehlgeschlagen", f"{e}")
             self.entries = []
-            self._update_filter_models()
+            self._update_filter_projects()
 
-    def _update_filter_models(self):
-        models = sorted(set(e.model for e in self.entries if e.model))
-        values = ["(alle)"] + models
+    def _update_filter_projects(self):
+        projects = sorted(set((e.project or "").strip() for e in self.entries if (e.project or "").strip()))
+        values = ["(alle)"] + projects
         self.filter_combo.configure(values=values)
-        if self.filter_model_var.get() not in values:
-            self.filter_model_var.set("(alle)")
+        if self.filter_project_var.get() not in values:
+            self.filter_project_var.set("(alle)")
 
     def _refresh_log(self):
         # Update filter list (in case new model added)
-        self._update_filter_models()
+        self._update_filter_projects()
 
         q = self.search_var.get().strip().lower()
-        model_filter = self.filter_model_var.get()
+        project_filter = self.filter_project_var.get()
 
         def matches(e: LogEntry):
-            if model_filter != "(alle)" and e.model != model_filter:
+            if project_filter != "(alle)" and (e.project or "") != project_filter:
                 return False
             if not q:
                 return True
@@ -537,6 +624,59 @@ class LogbookApp(tk.Tk):
                 return e
         return None
 
+    def _render_to_text_widget(self, txt: tk.Text, e: LogEntry):
+        """Render entry detail into a Text widget with clickable media links."""
+        txt.configure(state="normal")
+        txt.delete("1.0", "end")
+
+        def put(line=""):
+            txt.insert("end", line + "\n")
+
+        put(f"Datum: {e.timestamp}")
+        put(f"Modell: {e.model}")
+
+        if e.project:
+            put(f"Projekt: {e.project}")
+        if e.purpose:
+            put(f"Zweck/Task: {e.purpose}")
+        if e.section:
+            put(f"Kapitel: {e.section}")
+        if e.tags:
+            put(f"Tags: {', '.join(e.tags)}")
+
+        # Media: clickable filenames
+        def put_media(label: str, files: list):
+            if not files:
+                return
+            put(f"{label}:")
+            for fname in files:
+                start = txt.index("end-1c")
+                txt.insert("end", f"  {fname}\n")
+                end = txt.index("end-1c")
+                tag = f"media::{fname}"
+                txt.tag_add(tag, start, end)
+                txt.tag_config(tag, foreground="blue", underline=1)
+                txt.tag_bind(tag, "<Button-1>", lambda _ev, f=fname: self._open_media_file(f))
+                txt.tag_bind(tag, "<Enter>", lambda _ev: txt.config(cursor="hand2"))
+                txt.tag_bind(tag, "<Leave>", lambda _ev: txt.config(cursor=""))
+
+        put("")
+        put_media("Media (Prompt)", e.media_prompt or [])
+        put_media("Media (Antwort)", e.media_response or [])
+
+        put("")
+        put("PROMPT:")
+        put(e.prompt or "")
+        put("")
+        put("ANTWORT:")
+        put(e.response or "")
+
+        txt.configure(state="disabled")
+
+    def _render_entry_detail(self, e: LogEntry):
+        """Render entry detail in the main detail text box."""
+        self._render_to_text_widget(self.detail_txt, e)
+
     def _on_select_entry(self, _evt=None):
         sel = self.tree.selection()
         if not sel:
@@ -545,7 +685,7 @@ class LogbookApp(tk.Tk):
         e = self._find_entry(entry_id)
         if not e:
             return
-        self._set_detail_text(self._format_entry_detail(e))
+        self._render_entry_detail(e)
 
     def _set_detail_text(self, text: str):
         self.detail_txt.configure(state="normal")
@@ -566,6 +706,10 @@ class LogbookApp(tk.Tk):
             lines.append(f"Kapitel: {e.section}")
         if e.tags:
             lines.append(f"Tags: {', '.join(e.tags)}")
+        if e.media_prompt:
+            lines.append(f"Media (Prompt): {', '.join(e.media_prompt)}")
+        if e.media_response:
+            lines.append(f"Media (Antwort): {', '.join(e.media_response)}")
 
         lines.append("")
         lines.append("PROMPT:")
@@ -623,8 +767,7 @@ class LogbookApp(tk.Tk):
 
         txt = tk.Text(frm, wrap="word")
         txt.grid(row=1, column=0, sticky="nsew", pady=(10, 10))
-        txt.insert("1.0", self._format_entry_detail(e))
-        txt.configure(state="disabled")
+        self._render_to_text_widget(txt, e)
 
         btns = ttk.Frame(frm)
         btns.grid(row=2, column=0, sticky="ew")
@@ -647,9 +790,86 @@ class LogbookApp(tk.Tk):
         self._refresh_log()
 
     # ---------------- Export ----------------
+    def _get_export_criteria(self):
+        # returns dict: {"project": str|None, "model": str|None, "tags": set[str]|None}
+        win = tk.Toplevel(self)
+        win.title("Export – Filter")
+        win.transient(self)
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill="both", expand=True)
+
+        # values
+        projects = sorted(set((e.project or "").strip() for e in self.entries if (e.project or "").strip()))
+        models = sorted(set((e.model or "").strip() for e in self.entries if (e.model or "").strip()))
+
+        project_var = tk.StringVar(value="(alle)")
+        model_var = tk.StringVar(value="(alle)")
+        tags_var = tk.StringVar(value="")
+
+        ttk.Label(frm, text="Projekt").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(frm, textvariable=project_var, values=["(alle)"] + projects, state="readonly").grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        ttk.Label(frm, text="Modell").grid(row=2, column=0, sticky="w")
+        ttk.Combobox(frm, textvariable=model_var, values=["(alle)"] + models, state="readonly").grid(row=3, column=0, sticky="ew", pady=(0, 8))
+
+        ttk.Label(frm, text="Tags (kommagetrennt, optional)").grid(row=4, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=tags_var).grid(row=5, column=0, sticky="ew", pady=(0, 8))
+
+        frm.columnconfigure(0, weight=1)
+
+        result = {"project": None, "model": None, "tags": None}
+
+        def ok():
+            p = project_var.get()
+            m = model_var.get()
+            t = [x.strip() for x in tags_var.get().split(",") if x.strip()]
+            result["project"] = None if p == "(alle)" else p
+            result["model"] = None if m == "(alle)" else m
+            result["tags"] = None if not t else set(t)
+            win.destroy()
+
+        def cancel():
+            # None signals "cancel export"
+            result.clear()
+            win.destroy()
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=6, column=0, sticky="e", pady=(8, 0))
+        ttk.Button(btns, text="Abbrechen", command=cancel).pack(side="right")
+        ttk.Button(btns, text="Exportieren", command=ok).pack(side="right", padx=(0, 8))
+
+        self.wait_window(win)
+        return result if result else None
+
+    def _filter_entries_for_export(self, criteria):
+        # criteria: dict from _get_export_criteria
+        out = []
+        for e in self._get_current_view_entries():
+            if criteria.get("project") and (e.project or "") != criteria["project"]:
+                continue
+            if criteria.get("model") and (e.model or "") != criteria["model"]:
+                continue
+            tags = criteria.get("tags")
+            if tags:
+                etags = set(e.tags or [])
+                if etags.isdisjoint(tags):
+                    continue
+            out.append(e)
+        return out
+
     def export_csv(self):
         if not self.entries:
             messagebox.showinfo("Export", "Keine Einträge zum Exportieren.")
+            return
+        criteria = self._get_export_criteria()
+        if criteria is None:
+            return
+        export_entries = self._filter_entries_for_export(criteria)
+        if not export_entries:
+            messagebox.showinfo("Export", "Keine Einträge passen zu den gewählten Filtern.")
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",
@@ -659,12 +879,11 @@ class LogbookApp(tk.Tk):
         if not path:
             return
         try:
-            # Use currently filtered entries order if possible
-            export_entries = self._get_current_view_entries()
             with open(path, "w", encoding="utf-8", newline="") as f:
                 writer = csv.writer(f, delimiter=",")
                 writer.writerow([
                     "timestamp", "model", "project", "purpose", "section", "tags",
+                    "media_prompt", "media_response",
                     "prompt", "response", "id"
                 ])
                 for e in export_entries:
@@ -675,6 +894,8 @@ class LogbookApp(tk.Tk):
                         e.purpose,
                         e.section,
                         ", ".join(e.tags or []),
+                        ", ".join(e.media_prompt or []),
+                        ", ".join(e.media_response or []),
                         e.prompt,
                         e.response,
                         e.id,
@@ -687,6 +908,13 @@ class LogbookApp(tk.Tk):
         if not self.entries:
             messagebox.showinfo("Export", "Keine Einträge zum Exportieren.")
             return
+        criteria = self._get_export_criteria()
+        if criteria is None:
+            return
+        export_entries = self._filter_entries_for_export(criteria)
+        if not export_entries:
+            messagebox.showinfo("Export", "Keine Einträge passen zu den gewählten Filtern.")
+            return
         path = filedialog.asksaveasfilename(
             defaultextension=".md",
             filetypes=[("Markdown", "*.md")],
@@ -695,7 +923,6 @@ class LogbookApp(tk.Tk):
         if not path:
             return
         try:
-            export_entries = self._get_current_view_entries()
             with open(path, "w", encoding="utf-8") as f:
                 f.write("# KI-Logbuch Export\n\n")
                 f.write(f"_Exportzeitpunkt: {now_local_iso()}_\n\n")
@@ -710,6 +937,10 @@ class LogbookApp(tk.Tk):
                         meta.append(f"**Tags:** {', '.join(e.tags)}")
                     if e.project:
                         meta.append(f"**Projekt:** {e.project}")
+                    if e.media_prompt:
+                        meta.append(f"**Media (Prompt):** {', '.join(e.media_prompt)}")
+                    if e.media_response:
+                        meta.append(f"**Media (Antwort):** {', '.join(e.media_response)}")
                     if meta:
                         f.write("\n\n".join(meta) + "\n\n")
 
