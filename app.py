@@ -710,5 +710,243 @@ class LogbookApp(tk.Tk):
         return "break"
 
     def _open_detail_popup(self):
-        """Open detail view in popup window."""
-        sel = self
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Detail", "Bitte erst einen Eintrag auswählen.")
+            return
+        entry_id = sel[0]
+        e = self._find_entry(entry_id)
+        if not e:
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Eintrag – Detail")
+        win.minsize(800, 600)
+
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill="both", expand=True)
+        frm.rowconfigure(1, weight=1)
+        frm.columnconfigure(0, weight=1)
+
+        header = ttk.Frame(frm)
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text=f"{dt_display(e.timestamp)}  |  {e.model}", font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, sticky="w")
+
+        txt = tk.Text(frm, wrap="word")
+        txt.grid(row=1, column=0, sticky="nsew", pady=(10, 10))
+        self._render_to_text_widget(txt, e)
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=2, column=0, sticky="ew")
+        ttk.Button(btns, text="Schließen", command=win.destroy).pack(side="right")
+
+    def delete_selected(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Löschen", "Bitte erst einen Eintrag auswählen.")
+            return
+        entry_id = sel[0]
+        e = self._find_entry(entry_id)
+        if not e:
+            return
+        ok = messagebox.askyesno("Löschen", "Diesen Eintrag wirklich löschen?")
+        if not ok:
+            return
+        self.entries = [x for x in self.entries if x.id != entry_id]
+        self._save_data()
+        self._refresh_log()
+
+    # ---------------- Export ----------------
+    def _get_export_criteria(self):
+        # returns dict: {"project": str|None, "model": str|None, "tags": set[str]|None}
+        win = tk.Toplevel(self)
+        win.title("Export – Filter")
+        win.transient(self)
+        win.grab_set()
+        win.resizable(False, False)
+
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill="both", expand=True)
+
+        # values
+        projects = sorted(set((e.project or "").strip() for e in self.entries if (e.project or "").strip()))
+        models = sorted(set((e.model or "").strip() for e in self.entries if (e.model or "").strip()))
+
+        project_var = tk.StringVar(value="(alle)")
+        model_var = tk.StringVar(value="(alle)")
+        tags_var = tk.StringVar(value="")
+
+        ttk.Label(frm, text="Projekt").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(frm, textvariable=project_var, values=["(alle)"] + projects, state="readonly").grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        ttk.Label(frm, text="Modell").grid(row=2, column=0, sticky="w")
+        ttk.Combobox(frm, textvariable=model_var, values=["(alle)"] + models, state="readonly").grid(row=3, column=0, sticky="ew", pady=(0, 8))
+
+        ttk.Label(frm, text="Tags (kommagetrennt, optional)").grid(row=4, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=tags_var).grid(row=5, column=0, sticky="ew", pady=(0, 8))
+
+        frm.columnconfigure(0, weight=1)
+
+        result = {"project": None, "model": None, "tags": None}
+
+        def ok():
+            p = project_var.get()
+            m = model_var.get()
+            t = [x.strip() for x in tags_var.get().split(",") if x.strip()]
+            result["project"] = None if p == "(alle)" else p
+            result["model"] = None if m == "(alle)" else m
+            result["tags"] = None if not t else set(t)
+            win.destroy()
+
+        def cancel():
+            # None signals "cancel export"
+            result.clear()
+            win.destroy()
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=6, column=0, sticky="e", pady=(8, 0))
+        ttk.Button(btns, text="Abbrechen", command=cancel).pack(side="right")
+        ttk.Button(btns, text="Exportieren", command=ok).pack(side="right", padx=(0, 8))
+
+        self.wait_window(win)
+        return result if result else None
+
+    def _filter_entries_for_export(self, criteria):
+        # criteria: dict from _get_export_criteria
+        out = []
+        for e in self._get_current_view_entries():
+            if criteria.get("project") and (e.project or "") != criteria["project"]:
+                continue
+            if criteria.get("model") and (e.model or "") != criteria["model"]:
+                continue
+            tags = criteria.get("tags")
+            if tags:
+                etags = set(e.tags or [])
+                if etags.isdisjoint(tags):
+                    continue
+            out.append(e)
+        return out
+
+    def export_csv(self):
+        if not self.entries:
+            messagebox.showinfo("Export", "Keine Einträge zum Exportieren.")
+            return
+        criteria = self._get_export_criteria()
+        if criteria is None:
+            return
+        export_entries = self._filter_entries_for_export(criteria)
+        if not export_entries:
+            messagebox.showinfo("Export", "Keine Einträge passen zu den gewählten Filtern.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv")],
+            title="CSV Export speichern",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f, delimiter=",")
+                writer.writerow([
+                    "timestamp", "model", "project", "purpose", "section", "tags",
+                    "media_prompt", "media_response",
+                    "prompt", "response", "id"
+                ])
+                for e in export_entries:
+                    writer.writerow([
+                        e.timestamp,
+                        e.model,
+                        e.project,
+                        e.purpose,
+                        e.section,
+                        ", ".join(e.tags or []),
+                        ", ".join(e.media_prompt or []),
+                        ", ".join(e.media_response or []),
+                        e.prompt,
+                        e.response,
+                        e.id,
+                    ])
+            messagebox.showinfo("Export", f"CSV gespeichert:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Export fehlgeschlagen", str(e))
+
+    def export_md(self):
+        if not self.entries:
+            messagebox.showinfo("Export", "Keine Einträge zum Exportieren.")
+            return
+        criteria = self._get_export_criteria()
+        if criteria is None:
+            return
+        export_entries = self._filter_entries_for_export(criteria)
+        if not export_entries:
+            messagebox.showinfo("Export", "Keine Einträge passen zu den gewählten Filtern.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".md",
+            filetypes=[("Markdown", "*.md")],
+            title="Markdown Export speichern",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("# KI-Logbuch Export\n\n")
+                f.write(f"_Exportzeitpunkt: {now_local_iso()}_\n\n")
+                for i, e in enumerate(export_entries, start=1):
+                    f.write(f"## {i}. {dt_display(e.timestamp)} — {e.model}\n\n")
+                    meta = []
+                    if e.purpose:
+                        meta.append(f"**Zweck/Task:** {e.purpose}")
+                    if e.section:
+                        meta.append(f"**Kapitel:** {e.section}")
+                    if e.tags:
+                        meta.append(f"**Tags:** {', '.join(e.tags)}")
+                    if e.project:
+                        meta.append(f"**Projekt:** {e.project}")
+                    if e.media_prompt:
+                        meta.append(f"**Media (Prompt):** {', '.join(e.media_prompt)}")
+                    if e.media_response:
+                        meta.append(f"**Media (Antwort):** {', '.join(e.media_response)}")
+                    if meta:
+                        f.write("\n\n".join(meta) + "\n\n")
+
+                    f.write("### Prompt\n\n")
+                    f.write("```text\n")
+                    f.write((e.prompt or "").rstrip() + "\n")
+                    f.write("```\n\n")
+
+                    f.write("### Antwort\n\n")
+                    f.write("```text\n")
+                    f.write((e.response or "").rstrip() + "\n")
+                    f.write("```\n\n")
+
+                    f.write("---\n\n")
+            messagebox.showinfo("Export", f"Markdown gespeichert:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Export fehlgeschlagen", str(e))
+
+    def _get_current_view_entries(self):
+        # Use current tree order, if any; else fallback to all sorted newest-first
+        ids = list(self.tree.get_children())
+        if ids:
+            out = []
+            for entry_id in ids:
+                e = self._find_entry(entry_id)
+                if e:
+                    out.append(e)
+            return out
+
+        def sort_key(e: LogEntry):
+            try:
+                return datetime.fromisoformat(e.timestamp)
+            except Exception:
+                return datetime.min.replace(tzinfo=timezone.utc)
+
+        return sorted(self.entries, key=sort_key, reverse=True)
+
+
+if __name__ == "__main__":
+    app = LogbookApp()
+    app.mainloop()
