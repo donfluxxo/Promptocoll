@@ -317,13 +317,14 @@ class LogbookApp(tk.Tk):
         )
 
         # Treeview
-        columns = ("time", "model", "preview", "tags")
+        columns = ("time", "model", "project", "preview", "tags")
         self.tree = ttk.Treeview(frm, columns=columns, show="headings", height=16)
         self.tree.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
 
         col_config = [
             ("time", "Datum", 140),
             ("model", "Modell", 160),
+            ("project", "Projekt", 120),
             ("preview", "Prompt (Preview)", 900),
             ("tags", "Tags", 160)
         ]
@@ -605,6 +606,7 @@ class LogbookApp(tk.Tk):
             self.tree.insert("", "end", iid=e.id, values=(
                 dt_display(e.timestamp),
                 e.model,
+                e.project or "",
                 preview,
                 ", ".join(e.tags)
             ))
