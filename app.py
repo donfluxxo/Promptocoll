@@ -343,14 +343,19 @@ class LogbookApp(tk.Tk):
             return cm if cm else "Custom"
         return m
 
-    def _clear_input_fields(self):
+    def _clear_input_fields(self, keep_optional: bool = False):
         self.ts_var.set("")
         self.prompt_txt.delete("1.0", "end")
         self.response_txt.delete("1.0", "end")
+
+        # Zweck/Task soll nach jedem Absenden neu sein
         self.purpose_var.set("")
-        self.section_var.set("")
-        self.tags_var.set("")
-        self.contrib_var.set("")   # Projekt
+
+        if not keep_optional:
+            # Optional-Felder komplett leeren (nur beim manuellen "Felder leeren")
+            self.section_var.set("")
+            self.tags_var.set("")
+            self.contrib_var.set("")   # Projekt
         # keep model selection as-is
 
     def _toast(self, msg: str, ms: int = 5000):
@@ -426,7 +431,7 @@ class LogbookApp(tk.Tk):
         )
         self.entries.append(entry)
         self._save_data()
-        self._clear_input_fields()
+        self._clear_input_fields(keep_optional=True)
         self._refresh_log()
         self._toast("✓ Eintrag gespeichert", 5000)
 
