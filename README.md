@@ -24,6 +24,7 @@ Mit Promptocoll kann man jede KI-Interaktion als Eintrag festhalten:
   - Kapitel
   - Projekt
   - Tags
+  - Medien
 
 Am Ende entsteht ein **übersichtliches, durchsuchbares Logbuch**, das sich z. B. als Grundlage für eine Dokumentation oder einen Anhang in der Arbeit eignet.
 
