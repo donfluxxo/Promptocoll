@@ -20,7 +20,7 @@ MEDIA_DIR.mkdir(exist_ok=True)
 MODEL_PRESETS = [
     "Keine Angabe", "gpt-5.2", "gpt-5.1-instant", "gpt-5.1-thinking",
     "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o4-mini",
-    "claude-3.5-sonnet", "claude-4.5-sonnet", "gemini-1.5-pro", "Custom…"
+    "claude-3.5-sonnet", "claude-4.5-sonnet", "gemini-1.5-pro", "Add new model…"
 ]
 
 
@@ -196,7 +196,7 @@ class LogbookApp(tk.Tk):
         self.model_combo.grid(row=1, column=0, sticky="ew", padx=(0, 8))
         self.model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
 
-        ttk.Label(frm, text="Custom Modell (nur wenn 'Custom…')").grid(
+        ttk.Label(frm, text="Neues Modell (nur wenn 'Add new model…')").grid(
             row=0, column=1, sticky="w"
         )
         self.custom_model_var = tk.StringVar()
@@ -364,7 +364,7 @@ class LogbookApp(tk.Tk):
 
     def _on_model_selected(self, _evt=None):
         """Handle model selection change."""
-        is_custom = self.model_var.get() == "Custom…"
+        is_custom = self.model_var.get() == "Add new model…"
         state = "normal" if is_custom else "disabled"
         self.custom_model_entry.configure(state=state)
         if is_custom:
@@ -372,11 +372,22 @@ class LogbookApp(tk.Tk):
 
     def _get_model_value(self) -> str:
         """Get selected model name."""
-        model = self.model_var.get()
-        if model == "Custom…":
-            custom = self.custom_model_var.get().strip()
-            return custom if custom else "Custom"
-        return model
+        m = self.model_var.get()
+        if m == "Add new model…":
+            cm = self.custom_model_var.get().strip()
+            if not cm:
+                return "Custom"
+
+            # Falls Modell noch nicht existiert, direkt nach "Keine Angabe" einfügen
+            if cm not in MODEL_PRESETS:
+                insert_index = 1 if MODEL_PRESETS and MODEL_PRESETS[0] == "Keine Angabe" else 0
+                MODEL_PRESETS.insert(insert_index, cm)
+
+                # Dropdowns aktualisieren
+                self.model_combo.configure(values=MODEL_PRESETS)
+
+            return cm
+        return m
 
     def _clear_input_fields(self, keep_optional: bool = False):
         """Clear input fields."""
@@ -384,6 +395,7 @@ class LogbookApp(tk.Tk):
         self.prompt_txt.delete("1.0", "end")
         self.response_txt.delete("1.0", "end")
         self.purpose_var.set("")
+        self.custom_model_var.set("")
 
         if not keep_optional:
             self.section_var.set("")
@@ -527,6 +539,10 @@ class LogbookApp(tk.Tk):
         
         self.entries.append(entry)
         self._save_data()
+        
+        # Direkt auf das neue Modell wechseln
+        self.model_var.set(entry.model)
+        self._on_model_selected()
         
         self.pending_media_prompt = []
         self.pending_media_response = []
@@ -699,15 +715,15 @@ class LogbookApp(tk.Tk):
         shift_pressed = (event.state & 0x0001) != 0
 
         # Determine scroll direction
-        if hasattr(event, "num"):
-            delta = 1 if event.num == 4 else -1
+        if hasattr(event, "num") and event.num in (4, 5):
+            delta = -1 if event.num == 4 else 1
         else:
-            delta = 1 if event.delta > 0 else -1
+            delta = -1 if event.delta > 0 else 1
 
         if shift_pressed:
-            self.tree.xview_scroll(-delta, "units")
+            self.tree.xview_scroll(delta, "units")
         else:
-            self.tree.yview_scroll(-delta, "units")
+            self.tree.yview_scroll(delta, "units")
 
         return "break"
 
@@ -733,15 +749,144 @@ class LogbookApp(tk.Tk):
         header = ttk.Frame(frm)
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
-        ttk.Label(header, text=f"{dt_display(e.timestamp)}  |  {e.model}", font=("TkDefaultFont", 11, "bold")).grid(row=0, column=0, sticky="w")
+        header_lbl = ttk.Label(
+            header,
+            text=f"{dt_display(e.timestamp)}  |  {e.model}",
+            font=("TkDefaultFont", 11, "bold")
+        )
+        header_lbl.grid(row=0, column=0, sticky="w")
 
         txt = tk.Text(frm, wrap="word")
         txt.grid(row=1, column=0, sticky="nsew", pady=(10, 10))
-        self._render_to_text_widget(txt, e)
+
+        def refresh_popup_content():
+            current = self._find_entry(entry_id)
+            if not current:
+                win.destroy()
+                return
+            header_lbl.configure(text=f"{dt_display(current.timestamp)}  |  {current.model}")
+            self._render_to_text_widget(txt, current)
+
+        refresh_popup_content()
 
         btns = ttk.Frame(frm)
         btns.grid(row=2, column=0, sticky="ew")
+        ttk.Button(
+            btns,
+            text="Bearbeiten",
+            command=lambda: self._open_edit_entry_popup(entry_id, parent=win, on_saved=refresh_popup_content)
+        ).pack(side="left")
         ttk.Button(btns, text="Schließen", command=win.destroy).pack(side="right")
+
+    def _open_edit_entry_popup(self, entry_id: str, parent=None, on_saved=None):
+        e = self._find_entry(entry_id)
+        if not e:
+            messagebox.showerror("Bearbeiten", "Eintrag nicht gefunden.")
+            return
+
+        win = tk.Toplevel(parent if parent is not None else self)
+        win.title("Eintrag bearbeiten")
+        win.transient(self)
+        win.grab_set()
+        win.minsize(760, 640)
+
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill="both", expand=True)
+        frm.columnconfigure(0, weight=1)
+        frm.columnconfigure(1, weight=1)
+        frm.rowconfigure(7, weight=1)
+        frm.rowconfigure(9, weight=1)
+
+        ts_var = tk.StringVar(value=e.timestamp)
+        model_var = tk.StringVar(value=e.model)
+        project_var = tk.StringVar(value=e.project)
+        purpose_var = tk.StringVar(value=e.purpose)
+        section_var = tk.StringVar(value=e.section)
+        tags_var = tk.StringVar(value=", ".join(e.tags or []))
+
+        ttk.Label(frm, text="Datum/Uhrzeit").grid(row=0, column=0, sticky="w")
+        ttk.Entry(frm, textvariable=ts_var).grid(row=1, column=0, sticky="ew", padx=(0, 8))
+
+        ttk.Label(frm, text="Modell").grid(row=0, column=1, sticky="w")
+        ttk.Entry(frm, textvariable=model_var).grid(row=1, column=1, sticky="ew")
+
+        ttk.Label(frm, text="Projekt").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Entry(frm, textvariable=project_var).grid(row=3, column=0, sticky="ew", padx=(0, 8))
+
+        ttk.Label(frm, text="Zweck/Task").grid(row=2, column=1, sticky="w", pady=(10, 0))
+        ttk.Entry(frm, textvariable=purpose_var).grid(row=3, column=1, sticky="ew")
+
+        ttk.Label(frm, text="Kapitel").grid(row=4, column=0, sticky="w", pady=(10, 0))
+        ttk.Entry(frm, textvariable=section_var).grid(row=5, column=0, sticky="ew", padx=(0, 8))
+
+        ttk.Label(frm, text="Tags (kommagetrennt)").grid(row=4, column=1, sticky="w", pady=(10, 0))
+        ttk.Entry(frm, textvariable=tags_var).grid(row=5, column=1, sticky="ew")
+
+        ttk.Label(frm, text="Prompt").grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        prompt_txt = tk.Text(frm, wrap="word", height=10)
+        prompt_txt.grid(row=7, column=0, columnspan=2, sticky="nsew")
+        prompt_txt.insert("1.0", e.prompt)
+
+        ttk.Label(frm, text="Antwort").grid(row=8, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        response_txt = tk.Text(frm, wrap="word", height=10)
+        response_txt.grid(row=9, column=0, columnspan=2, sticky="nsew")
+        response_txt.insert("1.0", e.response)
+
+        def save_changes():
+            prompt = prompt_txt.get("1.0", "end").strip()
+            response = response_txt.get("1.0", "end").strip()
+            if not prompt:
+                messagebox.showwarning("Fehlt", "Bitte einen Prompt eingeben.", parent=win)
+                return
+            if not response:
+                messagebox.showwarning("Fehlt", "Bitte eine Antwort eingeben.", parent=win)
+                return
+
+            ts_raw = ts_var.get().strip()
+            if not ts_raw:
+                messagebox.showwarning("Fehlt", "Bitte Datum/Uhrzeit eingeben.", parent=win)
+                return
+
+            try:
+                dt = parse_dt_flexible(ts_raw)
+                e.timestamp = dt.replace(microsecond=0).isoformat()
+            except Exception as ex:
+                messagebox.showerror("Datum/Uhrzeit", f"Kann Datum/Uhrzeit nicht lesen:\n{ex}", parent=win)
+                return
+
+            model_value = model_var.get().strip() or "unknown"
+            if model_value not in MODEL_PRESETS:
+                insert_index = 1 if MODEL_PRESETS and MODEL_PRESETS[0] == "Keine Angabe" else 0
+                MODEL_PRESETS.insert(insert_index, model_value)
+                self.model_combo.configure(values=MODEL_PRESETS)
+
+            e.model = model_value
+            e.project = project_var.get().strip()
+            e.purpose = purpose_var.get().strip()
+            e.section = section_var.get().strip()
+            e.tags = [t.strip() for t in tags_var.get().split(",") if t.strip()]
+            e.prompt = prompt
+            e.response = response
+
+            self._save_data()
+            self._refresh_log()
+
+            if self.tree.exists(entry_id):
+                self.tree.selection_set(entry_id)
+                self.tree.focus(entry_id)
+                self.tree.see(entry_id)
+                self._on_select_entry()
+
+            if callable(on_saved):
+                on_saved()
+
+            self._toast("✓ Eintrag aktualisiert", 3000)
+            win.destroy()
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=10, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Abbrechen", command=win.destroy).pack(side="right")
+        ttk.Button(btns, text="Speichern", command=save_changes).pack(side="right", padx=(0, 8))
 
     def delete_selected(self):
         sel = self.tree.selection()
